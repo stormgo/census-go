@@ -6,3 +6,4 @@ cd examples/census
 go run apicensus1.go
 go run apicensus2.go
 go run apicensus3.go
+go run apicensus4.go
