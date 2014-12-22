@@ -1,0 +1,8 @@
+#!/bin/sh
+#
+
+source ./run/z
+cd examples/census
+go run apicensus1.go
+go run apicensus2.go
+go run apicensus3.go
