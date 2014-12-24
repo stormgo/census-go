@@ -6,8 +6,6 @@ import (
 	"compress/zlib"
 	"encoding/base64"
 	"fmt"
-	. "github.com/franela/goblin"
-	. "github.com/onsi/gomega"
 	"io"
 	"io/ioutil"
 	"math"
@@ -17,6 +15,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	. "github.com/franela/goblin"
+	. "github.com/onsi/gomega"
 )
 
 type Query struct {
@@ -44,9 +45,11 @@ func TestRequest(t *testing.T) {
 
 		g.Describe("General request methods", func() {
 			var ts *httptest.Server
+			var requestHeaders http.Header
 
 			g.Before(func() {
 				ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requestHeaders = r.Header
 					if (r.Method == "GET" || r.Method == "OPTIONS" || r.Method == "TRACE" || r.Method == "PATCH" || r.Method == "FOOBAR") && r.URL.Path == "/foo" {
 						w.WriteHeader(200)
 						fmt.Fprint(w, "bar")
@@ -603,12 +606,35 @@ func TestRequest(t *testing.T) {
 				})
 			})
 			g.Describe("Redirects", func() {
-				g.It("Should do not follow by default", func() {
+				g.It("Should not follow by default", func() {
 					res, _ := Request{
 						Uri: ts.URL + "/redirect_test/301",
 					}.Do()
 					Expect(res.StatusCode).Should(Equal(301))
 				})
+
+				g.It("Should not follow if method is explicitly specified", func() {
+					res, err := Request{
+						Method: "GET",
+						Uri:    ts.URL + "/redirect_test/301",
+					}.Do()
+					Expect(res.StatusCode).Should(Equal(301))
+					Expect(err).Should(HaveOccurred())
+				})
+
+				g.It("Should copy request headers headers when redirecting if specified", func() {
+					req := Request{
+						Method:          "GET",
+						Uri:             ts.URL + "/redirect_test/301",
+						MaxRedirects:    4,
+						RedirectHeaders: true,
+					}
+					req.AddHeader("Testheader", "TestValue")
+					res, _ := req.Do()
+					Expect(res.StatusCode).Should(Equal(200))
+					Expect(requestHeaders.Get("Testheader")).Should(Equal("TestValue"))
+				})
+
 				g.It("Should follow only specified number of MaxRedirects", func() {
 					res, _ := Request{
 						Uri:          ts.URL + "/redirect_test/301",
@@ -797,8 +823,11 @@ func TestRequest(t *testing.T) {
 						w.Header().Add("x-forwarded-for", "test")
 						w.WriteHeader(200)
 						w.Write([]byte(""))
+					} else if r.Method == "GET" && r.URL.Path == "/redirect_test/301" {
+						http.Redirect(w, r, "/", 301)
 					}
 				}))
+
 			})
 
 			g.BeforeEach(func() {
@@ -816,6 +845,12 @@ func TestRequest(t *testing.T) {
 				Expect(res.Header.Get("x-forwarded-for")).Should(Equal("test"))
 				Expect(lastReq).ShouldNot(BeNil())
 				Expect(lastReq.Host).Should(Equal(proxiedHost))
+			})
+
+			g.It("Should not redirect if MaxRedirects is not set", func() {
+				res, err := Request{Uri: ts.URL + "/redirect_test/301", Proxy: ts.URL}.Do()
+				Expect(err).Should(HaveOccurred())
+				Expect(res.StatusCode).Should(Equal(301))
 			})
 
 			g.It("Should use Proxy authentication", func() {

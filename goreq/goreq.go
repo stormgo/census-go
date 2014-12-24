@@ -8,6 +8,7 @@ import (
 	"compress/zlib"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/ioutil"
@@ -32,6 +33,7 @@ type Request struct {
 	UserAgent         string
 	Insecure          bool
 	MaxRedirects      int
+	RedirectHeaders   bool
 	Proxy             string
 	Compression       *compression
 	BasicAuthUsername string
@@ -181,6 +183,7 @@ func prepareRequestBody(b interface{}) (io.Reader, error) {
 var defaultDialer = &net.Dialer{Timeout: 1000 * time.Millisecond}
 var defaultTransport = &http.Transport{Dial: defaultDialer.Dial, Proxy: http.ProxyFromEnvironment}
 var defaultClient = &http.Client{Transport: defaultTransport}
+
 var proxyTransport *http.Transport
 var proxyClient *http.Client
 
@@ -200,6 +203,9 @@ func (r Request) Do() (*Response, error) {
 	var er error
 	var transport = defaultTransport
 	var client = defaultClient
+	var redirectFailed bool
+
+	r.Method = valueOrDefault(r.Method, "GET")
 
 	if r.Proxy != "" {
 		proxyUrl, err := url.Parse(r.Proxy)
@@ -215,6 +221,22 @@ func (r Request) Do() (*Response, error) {
 		}
 		transport = proxyTransport
 		client = proxyClient
+	}
+
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > r.MaxRedirects {
+			redirectFailed = true
+			return errors.New("Error redirecting. MaxRedirects reached")
+		}
+
+		//By default Golang will not redirect request headers
+		// https://code.google.com/p/go/issues/detail?id=4800&q=request%20header
+		if r.RedirectHeaders {
+			for key, val := range via[0].Header {
+				req.Header[key] = val
+			}
+		}
+		return nil
 	}
 
 	if r.Insecure {
@@ -309,14 +331,13 @@ func (r Request) Do() (*Response, error) {
 			}
 		}
 
-		return nil, &Error{timeout: timeout, Err: err}
-	}
+		var response *Response
+		//If redirect fails we still want to return response data
+		if redirectFailed {
+			response = &Response{StatusCode: res.StatusCode, ContentLength: res.ContentLength, Header: res.Header, Body: &Body{reader: res.Body}}
+		}
 
-	if isRedirect(res.StatusCode) && r.MaxRedirects > 0 {
-		loc, _ := res.Location()
-		r.MaxRedirects--
-		r.Uri = loc.String()
-		return r.Do()
+		return response, &Error{timeout: timeout, Err: err}
 	}
 
 	if r.Compression != nil && strings.Contains(res.Header.Get("Content-Encoding"), r.Compression.ContentEncoding) {
@@ -330,17 +351,10 @@ func (r Request) Do() (*Response, error) {
 	}
 }
 
-func isRedirect(status int) bool {
-	switch status {
-	case http.StatusMovedPermanently:
-		return true
-	case http.StatusFound:
-		return true
-	case http.StatusSeeOther:
-		return true
-	case http.StatusTemporaryRedirect:
-		return true
-	default:
-		return false
+// Return value if nonempty, def otherwise.
+func valueOrDefault(value, def string) string {
+	if value != "" {
+		return value
 	}
+	return def
 }

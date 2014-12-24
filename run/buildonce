@@ -1,3 +1,6 @@
 #!/bin/bash -e
 
 source ./run/z
+
+go get github.com/franela/goblin
+go get github.com/onsi/gomega
